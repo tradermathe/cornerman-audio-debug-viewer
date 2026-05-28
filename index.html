@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Audio impact debug viewer — Phase 2</title>
+<style>
+  :root {
+    --bg: #1a1a1a;
+    --panel: #242424;
+    --panel-light: #2e2e2e;
+    --text: #e6e6e6;
+    --text-dim: #999;
+    --accent: #8ab4f8;
+    --lead: #f47174;
+    --rear: #6aa9f4;
+    --impact: #56d364;
+    --peak: #ffa657;
+    --prob: #8ab4f8;
+    --playhead: #ff5555;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: 100vh;
+  }
+  #sidebar {
+    background: var(--panel);
+    padding: 12px;
+    overflow-y: auto;
+    border-right: 1px solid #333;
+  }
+  #sidebar h2 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  #filter {
+    width: 100%;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    background: var(--panel-light);
+    border: 1px solid #444;
+    color: var(--text);
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  #roundList { list-style: none; padding: 0; margin: 0; }
+  #roundList li {
+    padding: 5px 6px;
+    cursor: pointer;
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #roundList li:hover { background: var(--panel-light); }
+  #roundList li.active { background: #3a4f74; color: white; }
+  #roundList li .fold {
+    color: var(--text-dim);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
+  #main {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    overflow: hidden;
+    padding: 12px;
+    gap: 8px;
+  }
+  #info {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  #info b { color: var(--text); font-weight: 500; }
+  #videoWrap {
+    background: black;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 4px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  #videoWrap video { max-width: 100%; max-height: 100%; }
+  #videoWrap.audio-only {
+    background: var(--panel);
+    color: var(--text-dim);
+    padding: 30px;
+    font-size: 12px;
+  }
+  #controls {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    background: var(--panel);
+    padding: 8px 12px;
+    border-radius: 4px;
+    flex-wrap: wrap;
+  }
+  #controls label { color: var(--text-dim); font-size: 12px; }
+  #controls input[type=range] { vertical-align: middle; width: 140px; }
+  #thrVal {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    min-width: 44px;
+    display: inline-block;
+  }
+  #stats { color: var(--text); font-variant-numeric: tabular-nums; }
+  #stats .pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--panel-light);
+    margin-right: 4px;
+    font-size: 11px;
+  }
+  #legend {
+    margin-left: auto;
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  #legend span {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+    vertical-align: -1px;
+    border-radius: 2px;
+  }
+
+  #canvasWrap {
+    background: var(--panel);
+    border-radius: 4px;
+    position: relative;
+    min-height: 320px;
+  }
+  #timeline {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+  #tooltip {
+    position: absolute;
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--text);
+    pointer-events: none;
+    display: none;
+    z-index: 5;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <aside id="sidebar">
+    <h2>Rounds (<span id="roundCount">0</span>)</h2>
+    <input id="filter" placeholder="filter… e.g. Killer, fold:2" autocomplete="off"/>
+    <ul id="roundList"></ul>
+  </aside>
+
+  <section id="main">
+    <div id="info">
+      <span id="title">—</span>
+      <span>fold <b id="fold">—</b></span>
+      <span>dur <b id="dur">—</b>s</span>
+      <span>fps <b id="fps">—</b></span>
+      <span>GT <b id="ngt">—</b></span>
+      <span>impacts <b id="nimp">—</b></span>
+    </div>
+
+    <div id="videoWrap">
+      <video id="player" controls preload="metadata"></video>
+    </div>
+
+    <div id="controls">
+      <label>τ <input id="thr" type="range" min="0.01" max="0.99" step="0.01" value="0.50"/></label>
+      <span id="thrVal">0.50</span>
+      <span id="stats">
+        <span class="pill">recall <b id="statRecall">—</b></span>
+        <span class="pill">hits <b id="statHits">—</b></span>
+        <span class="pill">peaks <b id="statPeaks">—</b></span>
+        <span class="pill">lift <b id="statLift">—</b></span>
+      </span>
+      <span id="legend">
+        <span style="background: var(--prob)"></span>prob
+        <span style="background: var(--lead)"></span>lead-GT
+        <span style="background: var(--rear)"></span>rear-GT
+        <span style="background: var(--impact)"></span>impact
+        <span style="background: var(--peak)"></span>peak ≥ τ
+      </span>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="timeline"></canvas>
+      <div id="tooltip"></div>
+    </div>
+  </section>
+
+<script>
+const TOL = 0.150;       // ±150 ms matching tolerance
+let DATA = null;
+let CURRENT = null;
+let cnv, ctx, w, h;
+const tooltipEl = () => document.getElementById('tooltip');
+
+async function loadData() {
+  const r = await fetch('data.json');
+  DATA = await r.json();
+  document.getElementById('roundCount').textContent = DATA.n_rounds;
+  renderList();
+  // Pick a clean round as default — Killer Heavy Bag r1 if present.
+  let initial = DATA.rounds.findIndex(r =>
+    r.stem.startsWith('Killer Heavy Bag') && r.round_index === 1
+  );
+  if (initial < 0) initial = 0;
+  selectRound(initial);
+}
+
+function renderList() {
+  const list = document.getElementById('roundList');
+  const filter = document.getElementById('filter').value.toLowerCase().trim();
+  list.innerHTML = '';
+  let foldFilter = null;
+  let textFilter = filter;
+  const foldMatch = filter.match(/fold:(\d)/);
+  if (foldMatch) {
+    foldFilter = parseInt(foldMatch[1]);
+    textFilter = filter.replace(/fold:\d/, '').trim();
+  }
+  DATA.rounds.forEach((r, i) => {
+    if (foldFilter !== null && r.fold !== foldFilter) return;
+    const label = `${r.stem.slice(0, 38)}${r.stem.length > 38 ? '…' : ''} r${r.round_index}`;
+    if (textFilter && !label.toLowerCase().includes(textFilter)) return;
+    const li = document.createElement('li');
+    li.textContent = label;
+    const fold = document.createElement('span');
+    fold.className = 'fold';
+    fold.textContent = `f${r.fold}`;
+    li.appendChild(fold);
+    li.dataset.idx = i;
+    if (CURRENT === r) li.className = 'active';
+    li.onclick = () => selectRound(i);
+    list.appendChild(li);
+  });
+}
+
+function selectRound(i) {
+  CURRENT = DATA.rounds[i];
+  renderList();
+  const r = CURRENT;
+  document.getElementById('title').textContent = `${r.stem} — r${r.round_index}`;
+  document.getElementById('fold').textContent = r.fold;
+  document.getElementById('dur').textContent = r.duration_sec.toFixed(1);
+  document.getElementById('fps').textContent = r.fps.toFixed(2);
+  document.getElementById('ngt').textContent = r.gt_lead.length + r.gt_rear.length;
+  document.getElementById('nimp').textContent = r.impacts.length;
+
+  const v = document.getElementById('player');
+  const wrap = document.getElementById('videoWrap');
+  // Always set up the audio fallback element first
+  if (r.video_path) {
+    wrap.classList.remove('audio-only');
+    wrap.innerHTML = `<video id="player" controls preload="metadata"
+      src="${r.video_path}"></video>
+      <audio id="audioFallback" controls preload="metadata"
+        src="${r.audio_path}" style="display:none;width:100%"></audio>`;
+    const v2 = document.getElementById('player');
+    v2.currentTime = r.round_start_sec;
+    v2.ontimeupdate = () => draw();
+    v2.onerror = () => switchToAudioOnly(r);
+  } else {
+    switchToAudioOnly(r);
+  }
+  resizeCanvas();
+  draw();
+  updateStats();
+}
+
+function resizeCanvas() {
+  cnv = document.getElementById('timeline');
+  const dpr = window.devicePixelRatio || 1;
+  w = cnv.clientWidth; h = cnv.clientHeight;
+  cnv.width = w * dpr; cnv.height = h * dpr;
+  ctx = cnv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function switchToAudioOnly(r) {
+  const wrap = document.getElementById('videoWrap');
+  wrap.classList.add('audio-only');
+  wrap.innerHTML = `<div style="text-align:center">
+    <div style="margin-bottom:8px">Video not available in this build — audio only.</div>
+    <audio id="player" controls preload="metadata"
+      src="${r.audio_path}" style="width:90%; max-width:480px"></audio>
+  </div>`;
+  const a = document.getElementById('player');
+  a.ontimeupdate = () => draw();
+}
+
+function timeToX(t) { return (t / CURRENT.duration_sec) * w; }
+function xToTime(x) { return (x / w) * CURRENT.duration_sec; }
+
+function findPeaks(t_arr, p_arr, thr) {
+  const peaks = [];
+  for (let i = 1; i < p_arr.length - 1; i++) {
+    if (p_arr[i] >= thr && p_arr[i] > p_arr[i - 1] && p_arr[i] >= p_arr[i + 1]) {
+      peaks.push({ t: t_arr[i], p: p_arr[i] });
+    }
+  }
+  return peaks;
+}
+
+function computeStats() {
+  if (!CURRENT) return null;
+  const r = CURRENT;
+  const thr = parseFloat(document.getElementById('thr').value);
+  // Match rule: any prob within ±TOL of a GT midpoint ≥ thr → hit.
+  // Use prob_v / prob_t directly (window-level max).
+  const gtMids = [
+    ...r.gt_lead.map(s => s.mid_sec),
+    ...r.gt_rear.map(s => s.mid_sec),
+  ];
+  let hits = 0;
+  const N = gtMids.length;
+  for (const m of gtMids) {
+    let bestProb = 0;
+    for (let i = 0; i < r.prob_t.length; i++) {
+      if (Math.abs(r.prob_t[i] - m) <= TOL) {
+        if (r.prob_v[i] > bestProb) bestProb = r.prob_v[i];
+      }
+    }
+    if (bestProb >= thr) hits++;
+  }
+  // peaks above thr
+  const peaks = findPeaks(r.prob_t, r.prob_v, thr);
+
+  // chance baseline: union coverage of pred windows ±TOL
+  const intervals = [];
+  for (let i = 0; i < r.prob_v.length; i++) {
+    if (r.prob_v[i] >= thr) intervals.push([r.prob_t[i] - TOL, r.prob_t[i] + TOL]);
+  }
+  intervals.sort((a, b) => a[0] - b[0]);
+  let cov = 0;
+  if (intervals.length) {
+    let [lo, hi] = intervals[0];
+    for (let k = 1; k < intervals.length; k++) {
+      if (intervals[k][0] <= hi) {
+        hi = Math.max(hi, intervals[k][1]);
+      } else {
+        cov += hi - lo;
+        [lo, hi] = intervals[k];
+      }
+    }
+    cov += hi - lo;
+  }
+  const chance = N > 0 ? Math.min(cov / r.duration_sec, 1) : 0;
+  const recall = N > 0 ? hits / N : 0;
+
+  return { thr, gtMids, hits, N, peaks, recall, chance, lift: recall - chance };
+}
+
+function updateStats() {
+  const s = computeStats();
+  if (!s) return;
+  document.getElementById('thrVal').textContent = s.thr.toFixed(2);
+  document.getElementById('statRecall').textContent = (s.recall * 100).toFixed(0) + '%';
+  document.getElementById('statHits').textContent = `${s.hits}/${s.N}`;
+  document.getElementById('statPeaks').textContent = s.peaks.length;
+  const liftStr = (s.lift * 100).toFixed(1) + 'pp';
+  const el = document.getElementById('statLift');
+  el.textContent = (s.lift >= 0 ? '+' : '') + liftStr;
+  el.style.color = s.lift >= 0.05 ? 'var(--impact)' : s.lift < 0 ? 'var(--lead)' : 'var(--text)';
+}
+
+function draw() {
+  if (!ctx || !CURRENT) return;
+  const r = CURRENT;
+  ctx.clearRect(0, 0, w, h);
+
+  // Layout: prob plot 0..0.6h, GT 0.65..0.78h, impacts 0.80..0.88h, peaks 0.90..h
+  const PROB_TOP = 8;
+  const PROB_BOT = h * 0.62;
+  const PROB_H = PROB_BOT - PROB_TOP;
+  const GT_LEAD_Y = h * 0.66;
+  const GT_REAR_Y = h * 0.74;
+  const GT_BAR_H = h * 0.05;
+  const IMP_Y_TOP = h * 0.82;
+  const IMP_Y_BOT = h * 0.90;
+  const PEAK_Y = h * 0.94;
+
+  // grid: 0.5/sec ticks
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.font = '10px monospace';
+  ctx.fillStyle = '#555';
+  const sec_step = r.duration_sec > 60 ? 5 : (r.duration_sec > 20 ? 2 : 1);
+  for (let t = 0; t <= r.duration_sec; t += sec_step) {
+    const x = timeToX(t);
+    ctx.beginPath(); ctx.moveTo(x, PROB_TOP); ctx.lineTo(x, h); ctx.stroke();
+    ctx.fillText(`${t}s`, x + 2, PROB_BOT + 12);
+  }
+  // 0.5 prob grid line
+  ctx.strokeStyle = '#444'; ctx.setLineDash([2, 3]);
+  for (const lvl of [0.5]) {
+    const y = PROB_TOP + (1 - lvl) * PROB_H;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // threshold line
+  const thr = parseFloat(document.getElementById('thr').value);
+  const thrY = PROB_TOP + (1 - thr) * PROB_H;
+  ctx.strokeStyle = 'rgba(255, 166, 87, 0.5)';
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(0, thrY); ctx.lineTo(w, thrY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // prob filled area
+  ctx.fillStyle = 'rgba(138, 180, 248, 0.18)';
+  ctx.strokeStyle = 'var(--prob)';
+  ctx.beginPath();
+  ctx.moveTo(timeToX(r.prob_t[0]), PROB_BOT);
+  for (let i = 0; i < r.prob_t.length; i++) {
+    const x = timeToX(r.prob_t[i]);
+    const y = PROB_TOP + (1 - r.prob_v[i]) * PROB_H;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.lineTo(timeToX(r.prob_t[r.prob_t.length - 1]), PROB_BOT);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = '#8ab4f8';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < r.prob_t.length; i++) {
+    const x = timeToX(r.prob_t[i]);
+    const y = PROB_TOP + (1 - r.prob_v[i]) * PROB_H;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // GT lead spans
+  ctx.fillStyle = '#f47174';
+  for (const s of r.gt_lead) {
+    ctx.fillRect(timeToX(s.start_sec), GT_LEAD_Y, timeToX(s.end_sec) - timeToX(s.start_sec), GT_BAR_H);
+  }
+  // GT rear spans
+  ctx.fillStyle = '#6aa9f4';
+  for (const s of r.gt_rear) {
+    ctx.fillRect(timeToX(s.start_sec), GT_REAR_Y, timeToX(s.end_sec) - timeToX(s.start_sec), GT_BAR_H);
+  }
+  ctx.fillStyle = '#bbb'; ctx.font = '9px monospace';
+  ctx.fillText('lead', 2, GT_LEAD_Y + GT_BAR_H * 0.7);
+  ctx.fillText('rear', 2, GT_REAR_Y + GT_BAR_H * 0.7);
+
+  // impact markers
+  ctx.strokeStyle = '#56d364'; ctx.lineWidth = 1.5;
+  for (const t of r.impacts) {
+    const x = timeToX(t);
+    ctx.beginPath(); ctx.moveTo(x, IMP_Y_TOP); ctx.lineTo(x, IMP_Y_BOT); ctx.stroke();
+  }
+  ctx.fillStyle = '#7a7'; ctx.fillText('impact', 2, IMP_Y_BOT - 1);
+
+  // peaks above threshold
+  const peaks = findPeaks(r.prob_t, r.prob_v, thr);
+  ctx.fillStyle = '#ffa657';
+  for (const p of peaks) {
+    const x = timeToX(p.t);
+    ctx.beginPath();
+    ctx.arc(x, PEAK_Y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#bbb'; ctx.fillText(`peaks ≥ τ (${peaks.length})`, 2, PEAK_Y + 4);
+
+  // playhead
+  const v = document.getElementById('player');
+  if (v && !isNaN(v.currentTime)) {
+    // For video, time is in the source video; subtract round_start_sec.
+    // For audio fallback, time is within the round (0-based) already.
+    const isAudio = v.tagName.toLowerCase() === 'audio';
+    const tInRound = isAudio ? v.currentTime : (v.currentTime - r.round_start_sec);
+    if (tInRound >= 0 && tInRound <= r.duration_sec) {
+      const x = timeToX(tInRound);
+      ctx.strokeStyle = '#ff5555'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+  }
+}
+
+function onCanvasClick(ev) {
+  if (!CURRENT) return;
+  const rect = cnv.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const t = xToTime(x);
+  const v = document.getElementById('player');
+  if (v && !isNaN(v.duration)) {
+    const isAudio = v.tagName.toLowerCase() === 'audio';
+    v.currentTime = isAudio ? t : (CURRENT.round_start_sec + t);
+    if (v.paused) v.play();
+  }
+}
+
+function onCanvasHover(ev) {
+  if (!CURRENT) return;
+  const rect = cnv.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const t = xToTime(x);
+  // find nearest prob sample
+  let nearestI = 0, bestDiff = Infinity;
+  for (let i = 0; i < CURRENT.prob_t.length; i++) {
+    const d = Math.abs(CURRENT.prob_t[i] - t);
+    if (d < bestDiff) { bestDiff = d; nearestI = i; }
+  }
+  // find which GT span (if any) contains t
+  let gtHit = null;
+  for (const s of CURRENT.gt_lead) {
+    if (t >= s.start_sec && t <= s.end_sec) { gtHit = { side: 'lead', ...s }; break; }
+  }
+  if (!gtHit) {
+    for (const s of CURRENT.gt_rear) {
+      if (t >= s.start_sec && t <= s.end_sec) { gtHit = { side: 'rear', ...s }; break; }
+    }
+  }
+  // nearest impact
+  let nearImp = null, impDiff = Infinity;
+  for (const it of CURRENT.impacts) {
+    const d = Math.abs(it - t);
+    if (d < impDiff) { impDiff = d; nearImp = it; }
+  }
+  const tip = tooltipEl();
+  let lines = [`t = ${t.toFixed(3)}s   prob = ${CURRENT.prob_v[nearestI].toFixed(3)}`];
+  if (gtHit) lines.push(`GT: ${gtHit.side} ${gtHit.class}  [${gtHit.start_sec.toFixed(2)}, ${gtHit.end_sec.toFixed(2)}]`);
+  if (nearImp !== null) lines.push(`nearest impact: Δ${(t - nearImp).toFixed(3)}s`);
+  tip.innerHTML = lines.join('<br>');
+  tip.style.display = 'block';
+  tip.style.left = (ev.clientX + 10) + 'px';
+  tip.style.top = (ev.clientY + 10) + 'px';
+}
+
+function onCanvasLeave() { tooltipEl().style.display = 'none'; }
+
+window.addEventListener('load', async () => {
+  cnv = document.getElementById('timeline');
+  cnv.addEventListener('click', onCanvasClick);
+  cnv.addEventListener('mousemove', onCanvasHover);
+  cnv.addEventListener('mouseleave', onCanvasLeave);
+  document.getElementById('filter').addEventListener('input', renderList);
+  document.getElementById('thr').addEventListener('input', () => { updateStats(); draw(); });
+  window.addEventListener('resize', () => { resizeCanvas(); draw(); });
+  await loadData();
+});
+</script>
+</body>
+</html>
